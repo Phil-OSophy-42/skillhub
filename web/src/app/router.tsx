@@ -3,7 +3,9 @@ import { createRouter, createRoute, createRootRoute, redirect } from '@tanstack/
 import { Layout } from './layout'
 import { getCurrentUser } from '@/api/client'
 import { RoleGuard } from '@/shared/components/role-guard'
+import { RouteError } from '@/shared/components/route-error'
 import { createRequireAuth } from '@/shared/lib/auth-route'
+import { clearDynamicImportReloadGuard, recoverFromDynamicImportError } from '@/shared/lib/dynamic-import-recovery'
 import { normalizeSearchQuery } from '@/shared/lib/search-query'
 
 /**
@@ -25,7 +27,15 @@ function createLazyRouteComponent<TModule extends Record<string, unknown>>(
   // Lazy route modules are wrapped in a uniform suspense fallback so route transitions behave
   // consistently across public and dashboard pages.
   const LazyComponent = lazy(async () => {
-    const module = await importer()
+    const module = await importer().catch((error) => {
+      if (recoverFromDynamicImportError(error)) {
+        return new Promise<never>(() => {})
+      }
+      throw error
+    })
+    // Router resolution can finish before React.lazy imports the route module. Only clear the
+    // one-time reload guard after the chunk itself has loaded successfully.
+    clearDynamicImportReloadGuard()
     return { default: module[exportName] as ComponentType<Record<string, unknown>> }
   })
 
@@ -148,6 +158,7 @@ function DefaultNotFound() {
 const rootRoute = createRootRoute({
   component: Layout,
   notFoundComponent: DefaultNotFound,
+  errorComponent: RouteError,
 })
 
 const requireAuth = createRequireAuth(getCurrentUser)
@@ -474,7 +485,9 @@ const routeTree = rootRoute.addChildren([
 
 export const router = createRouter({
   routeTree,
+  basepath: import.meta.env.BASE_URL,
   defaultNotFoundComponent: DefaultNotFound,
+  defaultErrorComponent: RouteError,
 })
 
 declare module '@tanstack/react-router' {
